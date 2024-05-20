@@ -60,14 +60,12 @@ declare -a LEASES; declare -a ROUTES; declare -a DELEGATED
 # Pull all active leases from the ISC-DHCPd leases file using AWK. ISC-DHCPd stores the DHCPv6 DUID as an escaped string,
 # which we need to fix up a bit, in order to prevent malfunction of this script, and for proper unescaping later.
 readarray -t LEASES < <(
-awk 'BEGIN { RS="\nia-"; FS=";\n"; }
+awk 'BEGIN { RS="\n\nia-"; FS=";\n"; }
 /^na|^pd/ {
-	for(i=1;i<=NF;i++) {
-		# since we are splitting at quotes, replace any actual escaped quote with its octal equivalent
-		if ($i ~ /na|pd/) { gsub(/\\\"/,"\\042",$i); split($i,DUID,"\"") }
-		if ($i ~ /iaprefix/) { split($i,ADDR," ") }
-		if ($i ~ /iaaddr/) { split($i,ADDR," ") }
-	}
+	# since we are splitting at quotes, replace any actual escaped quote with its octal equivalent
+	gsub(/\\\"/,"\\042",$1); split($1,DUID,"\"")
+	for(i=2;i<=NF;i++) { if ($i ~ /^  iaprefix|^  iaaddr/) { split($i,ADDR," ") } }
+	#if ($2 ~ /^  iaprefix|^  iaaddr/) { split($2,ADDR," ") } # possibly even shorten like this
 	if (ADDR[6] == "active") {
 		# a space character in DUID hurts us, use its octal equivalent instead
 		gsub(" ","\\040",DUID[2])
