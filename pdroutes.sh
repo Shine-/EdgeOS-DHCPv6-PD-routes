@@ -1,5 +1,5 @@
 # Add downlink IPv6 routes for DHCPv6-PD leases on Ubiquiti EdgeOS (ISC-DHCPd)
-# Script version: 2024-05-15
+# Script version: 2024-05-22
 
 # Ubiquiti EdgeRouters with EdgeOS can be configured to delegate IPv6 prefixes
 # via DHCPv6 (IA-PD via DHCPv6-PD), in addition to assigning single IPv6
@@ -41,7 +41,16 @@
 # https://github.com/Shine-/EdgeOS-DHCPv6-PD-routes
 
 
-# Set up logging and log rotation
+# Argument parsing and help text
+unset DEBUG
+for A in "$@"; do
+       case "$A" in
+               -v) DEBUG="-v DEBUG=1";;
+               -vv) DEBUG="-v DEBUG=2";;
+               *) >&2 echo "Usage: \"`basename $0` -v\" or \"-vv\" for debug/verbose modes, no arguments for normal run"; exit 1;;
+       esac
+done
+# Logging and log rotation
 exec 3>&1 1> >(tee -a /tmp/delegated.log) 2>&1
 [ -f /tmp/delegated.log.bak ] || touch /tmp/delegated.log.bak
 rotate=$(($(date +%s) - $(date -r /tmp/delegated.log.bak +%s)))
@@ -53,52 +62,57 @@ echo "---" `date +%Y-%m-%d' '%H:%M:%S` "--- Log file backup is $rotate seconds o
 	exec $0 "$@" 1>&3 3>&-
 }
 
+# Now let's roll...
 echo "---" `date +%Y-%m-%d' '%H:%M:%S` "--- Starting setup/cleanup of routes for delegated prefixes"
 # Set up the arrays and hash lists we need
 declare -A NEXTHOP; declare -A ADDRESS
 declare -a LEASES; declare -a ROUTES; declare -a DELEGATED
+# Debug mode
+[ -n "$DEBUG" ] && echo "- Debug/verbose output enabled."
 # Pull all active leases from the ISC-DHCPd leases file using AWK. ISC-DHCPd stores the DHCPv6 DUID as an escaped string,
 # which we need to fix up a bit, in order to prevent malfunction of this script, and for proper unescaping later.
 readarray -t LEASES < <(
-awk 'BEGIN { RS="\n\nia-"; FS=";\n"; }
+awk $DEBUG 'BEGIN { RS="\n\nia-"; FS=";\n"; }
 /^na|^pd/ {
 	# since we are splitting at quotes, replace any actual escaped quote with its octal equivalent
 	gsub(/\\\"/,"\\042",$1); split($1,DUID,"\"")
 	for(i=2;i<=NF;i++) { if ($i ~ /^  iaprefix|^  iaaddr/) { split($i,ADDR," ") } }
 	#if ($2 ~ /^  iaprefix|^  iaaddr/) { split($2,ADDR," ") } # possibly even shorten like this
-	if (ADDR[6] == "active") {
+	if (ADDR[6] == "active" || DEBUG == "2") {
 		# a space character in DUID hurts us, use its octal equivalent instead
 		gsub(" ","\\040",DUID[2])
 		# octal character codes are 3-digits, any 4th digit is an actual number - escape it to its ASCII code
 		DUID[2] = gensub(/(\\[0-9]{3})([0-9])/,"\\1\\\\x3\\2","g",DUID[2])
-		printf "%s %s %s\n",DUID[1],ADDR[2],DUID[2]
+		printf "%s %s %s\n",DUID[1],DUID[2],(ADDR[6]=="active")?ADDR[2]:""
 	}
 	delete DUID; delete ADDR
-} ' "/var/run/dhcpdv6.leases"
+}' "/var/run/dhcpdv6.leases"
 )
 #declare -p LEASES
 [ ${#LEASES[@]} -ne 0 ] && {
 	# Now let's build a list of routes from the leases we parsed
-	echo "- We have the following active leases:"
+	echo "- We have the following leases:"
 	for item in "${LEASES[@]}"; do 
+#		[ -n "$DEBUG" ] && echo "Item: $item"
 		set -- $item
-#		echo "Item: $item"
-#		echo "IA-${1^^} $2 delegated to $3"
-		# Convert ISC-DHCPd DUID format (escaped string) to hex, skipping the first byte due to TP-Link brokenness.
-		# Explanation: on TP-Link devices, the DUID used for requesting PD resp. NA may differ in the 1st byte (either x+1 or x-1)
-		# As the first byte designates the DUID type only (e.g. DUID-LLT or DUID-EN), skipping it shouldn't hurt other clients.
-		#D=$(printf '%b' "$3" | hexdump -s 1 -ve '1/1 "%02x"') # Attn: this is causing invalid seek operation errors in hexdump
-		D=$(printf '%b' "$3" | hexdump -ve '1/1 "%02x"'); D=${D:2}
-#		echo "DUID $3 == $D"
-		[ "$1" = "pd" ] && { echo "Prefix $2 delegated to DUID $D"; }
-		[ "$1" = "na" ] && { echo "Address $2 leased to DUID $D"; }
-		[ "$1" = "na" ] && { ADDRESS["$D"]="$2"; }
-		[ "$1" = "pd" ] && { NEXTHOP["$2"]="$D"; }
+		# Convert ISC-DHCPd DUID format (escaped string) to hex
+		D=$(printf '%b' "$2" | hexdump -ve '1/1 "%02x"')
+		if [ -n "$3" ]; then {
+			[ -n "$DEBUG" ] && echo "IA-${1^^} $3 belongs to $2 -> $D"
+			# Skip first byte of DUID due to TP-Link brokenness. Explanation: on TP-Link devices, the DUID used for requesting
+			# PD resp. NA may differ in the 1st byte (either x+1 or x-1). As the first byte, according to the standard, designates
+			# only the DUID type (e.g. DUID-LLT or DUID-EN), skipping it will (hopefully) not cause any ambiguity.
+			D=${D:2}
+			[ "$1" = "pd" ] && { echo "Prefix $3 delegated to DUID $D"; NEXTHOP["$3"]="$D"; }
+			[ "$1" = "na" ] && { echo "Address $3 leased to DUID $D"; ADDRESS["$D"]="$3"; }
+		} else { echo "Inactive IA-${1^^} for $2 -> $D"; } fi
 	done
-#	echo "- We have active prefix delegations to the following devices:"
-#	printf '%s\n' "${NEXTHOP[@]}"
-#	echo "- To which we're delegating the following prefixes:"
-#	printf '%s\n' "${!NEXTHOP[@]}"
+	[ -n "$DEBUG" ] && {
+		echo "- We have active prefix delegations to the following clients:"
+		printf '%s\n' "${NEXTHOP[@]}"
+		echo "- To which we're delegating the following prefixes:"
+		printf '%s\n' "${!NEXTHOP[@]}"
+	}
 	echo "- We currently need the following routes:"
 	for prefix in ${!NEXTHOP[@]}; do
 		VIA="${ADDRESS["${NEXTHOP["$prefix"]}"]}"

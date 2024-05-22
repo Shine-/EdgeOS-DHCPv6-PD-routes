@@ -70,7 +70,7 @@ You will likely require a static or semi-static IPv6 uplink configuration, to bu
 
 It will read the ISC-DHCPd leases file and add routes for all PDs that it can find a destination hop for. If you run the script again, it will also delete any obsolete routes to destinations whose lease(s) have expired.
 
-The script will print its progress and some debug information on screen, and log the same to `/tmp/delegated.log`. There are some additional commented-out debug messages that you may want to re-enable in case you run into problems.
+The script will print its progress and some debug information on screen, and log the same to `/tmp/delegated.log`. There are two debug levels (`-v` and `-vv`) that will generate more output, mainly in regards to parsing the ISC-DHCPd leases file. `-vv` will try to decode and print out all known DUIDs from the leases file, not just the active leases (attention, slowdown!). This is especially useful to have additional test cases for decoding the abysmal ISC-DHCP DUID format to something more sane.
 
 You may want to run the script automatically after the EdgeRouter reboots (after EdgeOS restores the DHCPv6 leases file from backup) by copying it to `/config/scripts/post-config.d`, and also add the script to the hourly cron-jobs in `/etc/cron.hourly`. Note that in this case, it may take **up to an hour** for the script to pick up new/expired DHCPv6 leases and add/remove the relevant routes. So you might even want to create an own cron-job that runs more often.
 
