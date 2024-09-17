@@ -1,5 +1,5 @@
 # Add downlink IPv6 routes for DHCPv6-PD leases on Ubiquiti EdgeOS (ISC-DHCPd)
-# Script version: 2024-05-22
+# Script version: 2024-09-17
 
 # Ubiquiti EdgeRouters with EdgeOS can be configured to delegate IPv6 prefixes
 # via DHCPv6 (IA-PD via DHCPv6-PD), in addition to assigning single IPv6
@@ -122,7 +122,7 @@ awk $DEBUG 'BEGIN { RS="\n\nia-"; FS=";\n"; }
 		} || echo "# $prefix (ignoring, no DHCPv6 lease found for DUID ${NEXTHOP["$prefix"]})"
 	done
 	echo "- Database of routes for prefixes we've delegated before:"
-	[ -f "/tmp/delegated.db" ] && { readarray -t DELEGATED < /tmp/delegated.db; } || echo "<< empty >>"
+	[ -s "/tmp/delegated.db" ] && { readarray -t DELEGATED < /tmp/delegated.db; } || echo "<< empty >>"
 	for item in "${DELEGATED[@]}"; do echo $item; done
 	echo "- Checking for routes we don't need anymore (deleting as necessary):"
 	for item in "${DELEGATED[@]}"; do
