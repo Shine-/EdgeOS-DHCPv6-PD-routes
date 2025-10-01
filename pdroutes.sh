@@ -1,5 +1,6 @@
+#!/bin/bash
 # Add downlink IPv6 routes for DHCPv6-PD leases on Ubiquiti EdgeOS (ISC-DHCPd)
-# Script version: 2024-09-17
+# Script version: 2025-10-01
 
 # Ubiquiti EdgeRouters with EdgeOS can be configured to delegate IPv6 prefixes
 # via DHCPv6 (IA-PD via DHCPv6-PD), in addition to assigning single IPv6
@@ -28,8 +29,8 @@
 #   persistently. This is on purpose. The script is supposed to be re-run after
 #   each EdgeRouter reboot in order to recover downlink IPv6 connectivity.
 #
-# This script is tested on EdgeOS 1.10.11 and 2.0.9. It may or may not be
-# usable with other EdgeOS versions or other ISC-DHCPd equipped systems.
+# This script is tested on EdgeOS 1.10.11, 2.0.9 and 3.0.0. It may or may not
+# be usable with other EdgeOS versions or other ISC-DHCPd equipped systems.
 
 # This script is Public Domain. You may freely use, modify and distribute it
 # in whole or in part, for any purpose, with or without crediting me.
@@ -42,13 +43,14 @@
 
 
 # Argument parsing and help text
-unset DEBUG
+unset DEBUG; unset FORCE
 for A in "$@"; do
-       case "$A" in
-               -v) DEBUG="-v DEBUG=1";;
-               -vv) DEBUG="-v DEBUG=2";;
-               *) >&2 echo "Usage: \"`basename $0` -v\" or \"-vv\" for debug/verbose modes, no arguments for normal run"; exit 1;;
-       esac
+	case "$A" in
+		-v) DEBUG="-v DEBUG=1";;
+		-vv) DEBUG="-v DEBUG=2";;
+		-f) FORCE=1;;
+		*) >&2 echo "Usage: \"`basename $0` -v\" or \"-vv\" for debug/verbose modes, -f for forced run, no arguments for normal run"; exit 1;;
+	esac
 done
 # Logging and log rotation
 exec 3>&1 1> >(tee -a /tmp/delegated.log) 2>&1
@@ -63,12 +65,17 @@ echo "---" `date +%Y-%m-%d' '%H:%M:%S` "--- Log file backup is $rotate seconds o
 }
 
 # Now let's roll...
-echo "---" `date +%Y-%m-%d' '%H:%M:%S` "--- Starting setup/cleanup of routes for delegated prefixes"
+echo "---" `date +%Y-%m-%d' '%H:%M:%S` "--- Starting setup/cleanup of routes for delegated prefixes."
 # Set up the arrays and hash lists we need
 declare -A NEXTHOP; declare -A ADDRESS
 declare -a LEASES; declare -a ROUTES; declare -a DELEGATED
 # Debug mode
 [ -n "$DEBUG" ] && echo "- Debug/verbose output enabled."
+[ /var/run/dhcpdv6.leases -ot /tmp/delegated.db -a -z "$FORCE" ] && {
+	echo "---" `date +%Y-%m-%d' '%H:%M:%S` "--- No DHCPv6 lease changes, exiting."
+	exit 0
+}
+touch /tmp/delegated.db
 # Pull all active leases from the ISC-DHCPd leases file using AWK. ISC-DHCPd stores the DHCPv6 DUID as an escaped string,
 # which we need to fix up a bit, in order to prevent malfunction of this script, and for proper unescaping later.
 readarray -t LEASES < <(
@@ -124,10 +131,12 @@ awk $DEBUG 'BEGIN { RS="\n\nia-"; FS=";\n"; }
 	echo "- Database of routes for prefixes we've delegated before:"
 	[ -s "/tmp/delegated.db" ] && { readarray -t DELEGATED < /tmp/delegated.db; } || echo "<< empty >>"
 	for item in "${DELEGATED[@]}"; do echo $item; done
+	unset SAVEDB
 	echo "- Checking for routes we don't need anymore (deleting as necessary):"
 	for item in "${DELEGATED[@]}"; do
 		itemx="\<${item}\>"
 		[[ ${ROUTES[@]} =~ $itemx ]] && { echo "# $item (still delegating)"; } || {
+			SAVEDB=1
 			echo "Deleting route: $item"
 			ip -6 r del $item
 		}
@@ -135,12 +144,15 @@ awk $DEBUG 'BEGIN { RS="\n\nia-"; FS=";\n"; }
 	echo "- Checking for missing routes (adding as necessary):"
 	for ROUTE in "${ROUTES[@]}"; do
 		[ -n "$(ip -6 r | grep "$ROUTE")" ] && { echo "# $ROUTE (already present)"; } || {
+			SAVEDB=1
 			echo "Adding route: $ROUTE"
 			ip -6 r add $ROUTE
 		}
 	done
-	echo "- Writing current routes for delegated prefixes to database:"
-	{ for item in "${ROUTES[@]}"; do echo $item; done; } > /tmp/delegated.db
-	for item in "${ROUTES[@]}"; do echo $item; done
+	[ -z "$SAVEDB" -a -z "$FORCE" ] && { echo "- No changes, not saving database."; } || {
+		echo "- Writing current routes for delegated prefixes to database:"
+		{ for item in "${ROUTES[@]}"; do echo $item; done; } > /tmp/delegated.db
+		for item in "${ROUTES[@]}"; do echo $item; done
+	}
 }
 echo "---" `date +%Y-%m-%d' '%H:%M:%S` "--- Finished setup/cleanup of routes for delegated prefixes"
