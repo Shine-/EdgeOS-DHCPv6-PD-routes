@@ -1,6 +1,6 @@
 #!/bin/bash
 # Add downlink IPv6 routes for DHCPv6-PD leases on Ubiquiti EdgeOS (ISC-DHCPd)
-# Script version: 2025-10-01
+# Script version: 2025-10-08
 
 # Ubiquiti EdgeRouters with EdgeOS can be configured to delegate IPv6 prefixes
 # via DHCPv6 (IA-PD via DHCPv6-PD), in addition to assigning single IPv6
@@ -49,30 +49,30 @@ for A in "$@"; do
 		-v) DEBUG="-v DEBUG=1";;
 		-vv) DEBUG="-v DEBUG=2";;
 		-f) FORCE=1;;
-		*) >&2 echo "Usage: \"`basename $0` -v\" or \"-vv\" for debug/verbose modes, -f for forced run, no arguments for normal run"; exit 1;;
+		*) >&2 echo "Usage: \"`basename $0` -v\" or \"-vv\" for debug/verbose modes, \"-f\" for forced run, no arguments for normal run"; exit 1;;
 	esac
 done
 # Logging and log rotation
 exec 3>&1 1> >(tee -a /tmp/delegated.log) 2>&1
 [ -f /tmp/delegated.log.bak ] || touch /tmp/delegated.log.bak
 rotate=$(($(date +%s) - $(date -r /tmp/delegated.log.bak +%s)))
-echo "---" `date +%Y-%m-%d' '%H:%M:%S` "--- Log file backup is $rotate seconds old."
+[ -n "$DEBUG" ] && echo "[" `date +%Y-%m-%d' '%H:%M:%S` "] Log file backup is $rotate seconds old."
 [ "$rotate" -gt 86400 -a -f /tmp/delegated.log ] && {
-	echo - Rotating logs and restarting.
+	[ -n "$DEBUG" ] && echo - Rotating logs and restarting.
 	mv /tmp/delegated.log /tmp/delegated.log.bak
 	# Stop logging to old file and restart script
 	exec $0 "$@" 1>&3 3>&-
 }
 
 # Now let's roll...
-echo "---" `date +%Y-%m-%d' '%H:%M:%S` "--- Starting setup/cleanup of routes for delegated prefixes."
+echo "[" `date +%Y-%m-%d' '%H:%M:%S` "] Starting setup/cleanup of routes for delegated prefixes."
 # Set up the arrays and hash lists we need
 declare -A NEXTHOP; declare -A ADDRESS
 declare -a LEASES; declare -a ROUTES; declare -a DELEGATED
 # Debug mode
 [ -n "$DEBUG" ] && echo "- Debug/verbose output enabled."
 [ /var/run/dhcpdv6.leases -ot /tmp/delegated.db -a -z "$FORCE" ] && {
-	echo "---" `date +%Y-%m-%d' '%H:%M:%S` "--- No DHCPv6 lease changes, exiting."
+	echo "[" `date +%Y-%m-%d' '%H:%M:%S` "] No DHCPv6 lease changes, exiting."
 	exit 0
 }
 touch /tmp/delegated.db
@@ -126,33 +126,39 @@ awk $DEBUG 'BEGIN { RS="\n\nia-"; FS=";\n"; }
 		[ -n "$VIA" ] && {
 			ROUTE="$prefix via $VIA"; ROUTES+=("$ROUTE")
 			echo "$ROUTE"
-		} || echo "# $prefix (ignoring, no DHCPv6 lease found for DUID ${NEXTHOP["$prefix"]})"
+		} || {
+			[ -n "$DEBUG" ] && echo "# $prefix (ignoring, no DHCPv6 lease found for DUID ${NEXTHOP["$prefix"]})"
+		}
 	done
 	echo "- Database of routes for prefixes we've delegated before:"
 	[ -s "/tmp/delegated.db" ] && { readarray -t DELEGATED < /tmp/delegated.db; } || echo "<< empty >>"
 	for item in "${DELEGATED[@]}"; do echo $item; done
 	unset SAVEDB
-	echo "- Checking for routes we don't need anymore (deleting as necessary):"
+	echo "- Checking for routes we don't need anymore (deleting as necessary)..."
 	for item in "${DELEGATED[@]}"; do
 		itemx="\<${item}\>"
-		[[ ${ROUTES[@]} =~ $itemx ]] && { echo "# $item (still delegating)"; } || {
+		if [[ ${ROUTES[@]} =~ $itemx ]]; then
+			[ -n "$DEBUG" ] && echo "# $item (still delegating)"
+		else
 			SAVEDB=1
 			echo "Deleting route: $item"
 			ip -6 r del $item
-		}
+		fi
 	done
-	echo "- Checking for missing routes (adding as necessary):"
+	echo "- Checking for missing routes (adding as necessary)..."
 	for ROUTE in "${ROUTES[@]}"; do
-		[ -n "$(ip -6 r | grep "$ROUTE")" ] && { echo "# $ROUTE (already present)"; } || {
+		if [ -n "$(ip -6 r | grep "$ROUTE")" ]; then
+			[ -n "$DEBUG" ] && echo "# $ROUTE (already present)"
+		else
 			SAVEDB=1
 			echo "Adding route: $ROUTE"
 			ip -6 r add $ROUTE
-		}
+		fi
 	done
 	[ -z "$SAVEDB" -a -z "$FORCE" ] && { echo "- No changes, not saving database."; } || {
-		echo "- Writing current routes for delegated prefixes to database:"
+		echo "- Writing current routes for delegated prefixes to database..."
 		{ for item in "${ROUTES[@]}"; do echo $item; done; } > /tmp/delegated.db
-		for item in "${ROUTES[@]}"; do echo $item; done
+		[ -n "$DEBUG" ] && { for item in "${ROUTES[@]}"; do echo $item; done; }
 	}
 }
-echo "---" `date +%Y-%m-%d' '%H:%M:%S` "--- Finished setup/cleanup of routes for delegated prefixes"
+echo "[" `date +%Y-%m-%d' '%H:%M:%S` "] Finished setup/cleanup of routes for delegated prefixes."

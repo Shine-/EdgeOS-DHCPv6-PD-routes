@@ -72,9 +72,27 @@ It will read the ISC-DHCPd leases file and add routes for all PDs that it can fi
 
 The script will print its progress and some debug information on screen, and log the same to `/tmp/delegated.log`. There are two debug levels (`-v` and `-vv`) that will generate more output, mainly in regards to parsing the ISC-DHCPd leases file. `-vv` will try to decode and print out all known DUIDs from the leases file, not just the active leases (attention, slowdown!). This is especially useful to have additional test cases for decoding the abysmal ISC-DHCP DUID format to something more sane.
 
-You may want to run the script automatically after the EdgeRouter reboots (after EdgeOS restores the DHCPv6 leases file from backup) by copying it to `/config/scripts/post-config.d`, and also add the script to the hourly cron-jobs in `/etc/cron.hourly`. Note that in this case, it may take **up to an hour** for the script to pick up new/expired DHCPv6 leases and add/remove the relevant routes. So you might even want to create an own cron-job that runs more often.
+You may want to run the script automatically after the EdgeRouter reboots (after EdgeOS restores the DHCPv6 leases file from backup) by copying it to `/config/scripts/post-config.d`, and also create a cron job (e.g. using EdgeOS task scheduler) to recurringly run it. Note that it may take a while for your router to pick up new/expired DHCPv6 leases and add/remove the relevant routes, depending on the schedule you choose to run the script.
 
-If you find a way to make EdgeOS run the script trigger-based, e.g. on new or expiring DHCPv6 leases, let me know!
+For example, to configure EdgeOS to run the script every 3 minutes, use the following:
+
+<details><summary>EdgeOS Task Scheduler entry</summary>
+
+```
+system {
+    task-scheduler {
+        task pdroutes {
+            executable {
+                path /config/scripts/post-config.d/pdroutes.sh
+            }
+            interval 3m
+        }
+    }
+}
+```
+</details>
+
+If you find a way to make EdgeOS run the script trigger-based instead, e.g. on new or expiring DHCPv6 leases, let me know!
 
 It shouldn't be hard to adapt the script to other (non-EdgeOS) systems that are using ISC-DHCPd for DHCPv6, as these will most likely suffer from the same problem. The script should be able to run with little to no modification in `bash` and not too cut-down `ash` (BusyBox) variants.
 
@@ -88,4 +106,4 @@ I've been using this script and its predecessors for many months now in my lab e
 
 Feel free to contact me if you find any bugs or have fixes or additions to share. You may also simply fork this repository and proceed development with your own version of the script - whatever fits you best!
 
-I might stop using EdgeOS sooner or later, since it seems to have been abandoned by Ubiquiti anyway. In addition, ISC-DHCPd is EoL'd by now, so it will disappear from active use over time. But as long as I'm still using EdgeOS, I'm open for suggestions concerning this script!
+I might stop using EdgeOS sooner or later, since it seems to have been abandoned by Ubiquiti anyway (note that I consider EdgeOS version 3.0 only "life-support", not actual maintenance). In addition, ISC-DHCPd itself is EoL'd by now, so it will disappear from active use over time. But as long as I'm still using EdgeOS, I'm open for suggestions concerning this script!
