@@ -1,6 +1,6 @@
 #!/bin/bash
 # Add downlink IPv6 routes for DHCPv6-PD leases on Ubiquiti EdgeOS (ISC-DHCPd)
-# Script version: 2025-10-08
+# Script version: 2025-10-11
 
 # Ubiquiti EdgeRouters with EdgeOS can be configured to delegate IPv6 prefixes
 # via DHCPv6 (IA-PD via DHCPv6-PD), in addition to assigning single IPv6
@@ -76,6 +76,11 @@ declare -a LEASES; declare -a ROUTES; declare -a DELEGATED
 	exit 0
 }
 touch /tmp/delegated.db
+[ -n "$FORCE" ] && {
+	echo "- Parsing DHCPv6 lease file unconditionally..."
+} || {
+	echo "- DHCPv6 leases have changed since last run, parsing lease file..."
+}
 # Pull all active leases from the ISC-DHCPd leases file using AWK. ISC-DHCPd stores the DHCPv6 DUID as an escaped string,
 # which we need to fix up a bit, in order to prevent malfunction of this script, and for proper unescaping later.
 readarray -t LEASES < <(
@@ -98,21 +103,29 @@ awk $DEBUG 'BEGIN { RS="\n\nia-"; FS=";\n"; }
 #declare -p LEASES
 [ ${#LEASES[@]} -ne 0 ] && {
 	# Now let's build a list of routes from the leases we parsed
-	echo "- We have the following leases:"
+	[ -n "$DEBUG" ] && echo "- We have the following leases:"
 	for item in "${LEASES[@]}"; do 
 #		[ -n "$DEBUG" ] && echo "Item: $item"
 		set -- $item
 		# Convert ISC-DHCPd DUID format (escaped string) to hex
 		D=$(printf '%b' "$2" | hexdump -ve '1/1 "%02x"')
-		if [ -n "$3" ]; then {
-			[ -n "$DEBUG" ] && echo "IA-${1^^} $3 belongs to $2 -> $D"
+		if [ -n "$3" ]; then
+#			[ -n "$DEBUG" ] && echo "IA-${1^^} $3 belongs to $2 -> $D"
 			# Skip first byte of DUID due to TP-Link brokenness. Explanation: on TP-Link devices, the DUID used for requesting
 			# PD resp. NA may differ in the 1st byte (either x+1 or x-1). As the first byte, according to the standard, designates
 			# only the DUID type (e.g. DUID-LLT or DUID-EN), skipping it will (hopefully) not cause any ambiguity.
 			D=${D:2}
-			[ "$1" = "pd" ] && { echo "Prefix $3 delegated to DUID $D"; NEXTHOP["$3"]="$D"; }
-			[ "$1" = "na" ] && { echo "Address $3 leased to DUID $D"; ADDRESS["$D"]="$3"; }
-		} else { echo "Inactive IA-${1^^} for $2 -> $D"; } fi
+			[ "$1" = "pd" ] && {
+				[ -n "$DEBUG" ] && echo "Prefix $3 delegated to DUID $D"
+				NEXTHOP["$3"]="$D"
+			}
+			[ "$1" = "na" ] && {
+				[ -n "$DEBUG" ] && echo "Address $3 leased to DUID $D"
+				ADDRESS["$D"]="$3"
+			}
+		else
+			[ -n "$DEBUG" ] && echo "Inactive IA-${1^^} for $2 -> $D"
+		fi
 	done
 	[ -n "$DEBUG" ] && {
 		echo "- We have active prefix delegations to the following clients:"
@@ -120,19 +133,19 @@ awk $DEBUG 'BEGIN { RS="\n\nia-"; FS=";\n"; }
 		echo "- To which we're delegating the following prefixes:"
 		printf '%s\n' "${!NEXTHOP[@]}"
 	}
-	echo "- We currently need the following routes:"
+	[ -n "$DEBUG" ] && echo "- We currently need the following routes:"
 	for prefix in ${!NEXTHOP[@]}; do
 		VIA="${ADDRESS["${NEXTHOP["$prefix"]}"]}"
 		[ -n "$VIA" ] && {
 			ROUTE="$prefix via $VIA"; ROUTES+=("$ROUTE")
-			echo "$ROUTE"
+			[ -n "$DEBUG" ] && echo "$ROUTE"
 		} || {
 			[ -n "$DEBUG" ] && echo "# $prefix (ignoring, no DHCPv6 lease found for DUID ${NEXTHOP["$prefix"]})"
 		}
 	done
-	echo "- Database of routes for prefixes we've delegated before:"
-	[ -s "/tmp/delegated.db" ] && { readarray -t DELEGATED < /tmp/delegated.db; } || echo "<< empty >>"
-	for item in "${DELEGATED[@]}"; do echo $item; done
+	[ -n "$DEBUG" ] && echo "- Database of routes for prefixes we've delegated before:"
+	[ -s "/tmp/delegated.db" ] && { readarray -t DELEGATED < /tmp/delegated.db; } || { [ -n "$DEBUG" ] && echo "<< empty >>"; }
+	[ -n "$DEBUG" ] && for item in "${DELEGATED[@]}"; do echo $item; done
 	unset SAVEDB
 	echo "- Checking for routes we don't need anymore (deleting as necessary)..."
 	for item in "${DELEGATED[@]}"; do
@@ -155,7 +168,7 @@ awk $DEBUG 'BEGIN { RS="\n\nia-"; FS=";\n"; }
 			ip -6 r add $ROUTE
 		fi
 	done
-	[ -z "$SAVEDB" -a -z "$FORCE" ] && { echo "- No changes, not saving database."; } || {
+	[ -z "$SAVEDB" -a -z "$FORCE" ] && { echo "- No changes, not saving route database."; } || {
 		echo "- Writing current routes for delegated prefixes to database..."
 		{ for item in "${ROUTES[@]}"; do echo $item; done; } > /tmp/delegated.db
 		[ -n "$DEBUG" ] && { for item in "${ROUTES[@]}"; do echo $item; done; }
