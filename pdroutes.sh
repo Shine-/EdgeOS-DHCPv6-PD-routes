@@ -1,6 +1,6 @@
 #!/bin/bash
 # Add downlink IPv6 routes for DHCPv6-PD leases on Ubiquiti EdgeOS (ISC-DHCPd)
-# Script version: 2025-10-11
+# Script version: 2026-01-24
 
 # Ubiquiti EdgeRouters with EdgeOS can be configured to delegate IPv6 prefixes
 # via DHCPv6 (IA-PD via DHCPv6-PD), in addition to assigning single IPv6
@@ -110,11 +110,11 @@ awk $DEBUG 'BEGIN { RS="\n\nia-"; FS=";\n"; }
 		# Convert ISC-DHCPd DUID format (escaped string) to hex
 		D=$(printf '%b' "$2" | hexdump -ve '1/1 "%02x"')
 		if [ -n "$3" ]; then
-#			[ -n "$DEBUG" ] && echo "IA-${1^^} $3 belongs to $2 -> $D"
-			# Skip first byte of DUID due to TP-Link brokenness. Explanation: on TP-Link devices, the DUID used for requesting
-			# PD resp. NA may differ in the 1st byte (either x+1 or x-1). As the first byte, according to the standard, designates
-			# only the DUID type (e.g. DUID-LLT or DUID-EN), skipping it will (hopefully) not cause any ambiguity.
-			D=${D:2}
+			[ -n "$DEBUG" ] && echo "IA-${1^^} $3 belongs to $2 -> $D"
+			# Skip the IAID part of the string, since this may differ depending on the DHCP client used. E.g. on TP-Link devices,
+			# the IAID used for requesting PD resp. NA may differ in the 1st byte (either x+1 or x-1). For other clients, it may
+			# differ completely, so skip it altogether. This will (hopefully) not cause any ambiguity.
+			D=${D:8}
 			[ "$1" = "pd" ] && {
 				[ -n "$DEBUG" ] && echo "Prefix $3 delegated to DUID $D"
 				NEXTHOP["$3"]="$D"
